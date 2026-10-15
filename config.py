@@ -7,13 +7,19 @@ import json
 import os
 from dataclasses import dataclass
 
+from content_loader import load_content
+
 # ======================================================================
-#  JSON 加载
+#  JSON 加载（核心包 + 模组内容包合并，带重复 ID 校验）
 # ======================================================================
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "data", "game_data.json")
+_ACHIEVEMENTS_PATH = os.path.join(os.path.dirname(__file__), "data", "achievements.json")
+_MODULES_DIR = os.path.join(os.path.dirname(__file__), "data", "modules")
 
-with open(_CONFIG_PATH, encoding="utf-8") as _f:
-    _data = json.load(_f)
+_data, _add_content, _content_issues = load_content(
+    _CONFIG_PATH, _ACHIEVEMENTS_PATH, _MODULES_DIR
+)
+_achievements = _data["achievements"]
 
 # ======================================================================
 #  Dataclass 配置封装
@@ -145,6 +151,10 @@ TICK_DT_MAX = _constants["tick_dt_max"]
 GAME_LOOP_MS = _constants["game_loop_ms"]
 HERO_PANEL_SCROLL_H = _constants["hero_panel_scroll_h"]
 SHOP_SCROLL_PADDING = _constants["shop_scroll_padding"]
+OFFLINE_CAP_SECONDS = _constants["offline_cap_seconds"]
+MILESTONE_STEPS = _constants["milestone_steps"]
+DAILY_REWARD_SECONDS = _constants["daily_reward_seconds"]
+AUTOSAVE_SECONDS = _constants["autosave_seconds"]
 
 # 颜色（flat 别名）
 COLOR_BG        = COLORS.bg
@@ -243,6 +253,19 @@ PRESTIGE_UPGRADES = _data["prestige_upgrades"]
 HEROES = _data["heroes"]
 EQUIP_TIERS = _data["equipment_tiers"]
 EQUIP_NAMES = _data["equipment_names"]
+ACHIEVEMENTS = _achievements
+
+# ---- P1 模组内容（来自 data/modules 的 add 键）----
+EQUIPMENT_SLOTS = _add_content.get("equipment_slots", [])
+EQUIPMENT_AFFIXES = _add_content.get("equipment_affixes", [])
+EQUIPMENT_SETS = _add_content.get("equipment_sets", [])
+EQUIPMENT_AFFIX_RARITY_MULT = _add_content.get("equipment_affix_rarity_mult", {})
+EQUIPMENT_AFFIX_COUNT = _add_content.get("equipment_affix_count", {})
+EQUIPMENT_SET_CHANCE = _add_content.get("equipment_set_chance", 0.0)
+GOLDEN_VARIANTS = _add_content.get("golden_variants", [])
+EVENTS = _add_content.get("events", [])
+DAILY_TASKS = _add_content.get("daily_tasks", [])
+CONTENT_ISSUES = _content_issues
 
 
 # ======================================================================

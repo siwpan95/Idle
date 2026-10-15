@@ -55,8 +55,10 @@ class _SkillsMixin:
 
         et = sk["effect_type"]
         if et == "instant_dps":
-            self.state.gold += self.state.dps * sk["effect_value"]
-            self.state.total_gold += self.state.dps * sk["effect_value"]
+            gain = self.state.dps * sk["effect_value"]
+            self.state.gold += gain
+            self.state.total_gold += gain
+            self.state.lifetime_gold += gain
         elif et == "dps_mult":
             self._active_dps_mult = sk["effect_value"]
             self._skill_active_until[skill_key] = sk.get("duration", 10)

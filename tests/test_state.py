@@ -40,7 +40,7 @@ class TestGameState:
             gold=999, total_gold=10000, dps=50.0, click_power=25,
             upgrades={"clicker": 3, "cursor": 1},
             prestige_points=5,
-            heroes={"mage": {"level": 3, "equipped": None}},
+            heroes={"mage": {"level": 3, "equipped": {}}},
         )
         d = original.to_dict()
         restored = GameState.from_dict(d)
@@ -50,7 +50,7 @@ class TestGameState:
         assert restored.click_power == 25
         assert restored.upgrades == {"clicker": 3, "cursor": 1}
         assert restored.prestige_points == 5
-        assert restored.heroes == {"mage": {"level": 3, "equipped": None}}
+        assert restored.heroes == {"mage": {"level": 3, "equipped": {}}}
 
     def test_from_dict_handles_missing_fields(self):
         """旧存档缺字段时自动补齐。"""
@@ -83,7 +83,7 @@ class TestGameState:
             active_challenge="speedrun",
             challenge_start_time=1000.0,
             challenge_completed=True,
-            heroes={"mage": {"level": 10, "equipped": {"name": "火焰法杖", "bonus": 15}}},
+            heroes={"mage": {"level": 10, "equipped": {"weapon": {"name": "火焰法杖", "bonus": 15}}}},
             equipment_inventory=[
                 {"name": "铁剑", "rarity": "common", "bonus": 3, "color": "#aaa"},
             ],
@@ -101,4 +101,5 @@ class TestGameState:
         assert restored.active_challenge == "speedrun"
         assert restored.challenge_completed is True
         assert restored.heroes["mage"]["level"] == 10
+        assert restored.heroes["mage"]["equipped"]["weapon"]["name"] == "火焰法杖"
         assert len(restored.equipment_inventory) == 1

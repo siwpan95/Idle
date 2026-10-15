@@ -1,7 +1,11 @@
 """
 核心计算 Mixin — 装备加载、DPS/点击力计算、初始化。
+P1：词条/套装、英雄主动技能、限时活动、挑战全局乘区、黄金变体。
 """
-from config import UPGRADE_DEFS, SKILLS, PRESTIGE_UPGRADES, HEROES, ERAS
+from config import (
+    UPGRADE_DEFS, SKILLS, PRESTIGE_UPGRADES, HEROES, ERAS,
+    MILESTONE_STEPS, ACHIEVEMENTS, GOLDEN_BUFF,
+)
 from .upgrade import UpgradeDef
 
 
@@ -25,7 +29,6 @@ class _CalcMixin:
             self._defs[d.key] = d
             if d.per_second > 0:
                 self._dps_gears.append(d)
-        # 解析 JSON 中的字符串引用为对象引用
         for d in self._defs.values():
             if isinstance(d.multiplier, str):
                 d.multiplier = self._defs.get(d.multiplier)
@@ -66,24 +69,16 @@ class _CalcMixin:
 
     # ==================== 核心计算 ====================
     def _recalc(self):
-        from config import GOLDEN_BUFF
-
         challenge = self._get_challenge()
         restrict_dps = challenge and challenge.get("restrict_dps")
 
         # ---- 基础 DPS ----
         dps = self._calc_base_dps(restrict_dps)
 
-        # ---- 协同效应 ----
+        # ---- 协同 / 力量联动 / CPS ----
         if not restrict_dps:
             dps = self._apply_synergies(dps)
-
-        # ---- 力量联动 ----
-        if not restrict_dps:
             dps = self._apply_power_gear(dps)
-
-        # ---- 全局 CPS 乘数 ----
-        if not restrict_dps:
             dps *= 1.01 ** self.state.upgrades.get("cps_multiplier", 0)
 
         # ---- 纪元加成 ----
@@ -96,8 +91,17 @@ class _CalcMixin:
         # ---- 技能加成 ----
         dps *= self._active_dps_mult
 
-        # ---- 英雄加成 ----
-        dps = self._apply_hero_dps(dps)
+        # ---- 英雄加成（被动 + 词条 + 套装 + 主动技能）----
+        if not restrict_dps:
+            dps = self._apply_hero_dps(dps)
+            dps *= self._hero_skill_dps_mult()
+            dps += self._hero_skill_add_dps()
+
+        # ---- 成就 / 黄金 / 活动 / 挑战 乘区 ----
+        dps *= self._achievement_dps_mult()
+        dps *= self._golden_dps_mult()
+        dps *= self._event_dps_mult()
+        dps *= self._challenge_global_dps_mult()
 
         self.state.dps = dps
 
@@ -115,8 +119,17 @@ class _CalcMixin:
                 continue
             mult = 2 ** self.state.upgrades.get(d.multiplier.key, 0) if d.multiplier else 1
             emp_pow = self.state.empowered.get(d.key, 0)
-            base += d.per_second * qty * mult * (2 ** emp_pow)
+            ms = self._milestone_mult(d.key, qty)
+            base += d.per_second * qty * mult * (2 ** emp_pow) * ms
         return base
+
+    def _milestone_mult(self, key: str, qty: int) -> float:
+        """里程碑倍率：拥有数量达到阈值时放大该建筑的产出。"""
+        best = 1.0
+        for count, factor in MILESTONE_STEPS:
+            if qty >= count and factor > best:
+                best = factor
+        return best
 
     def _apply_synergies(self, base_dps: float) -> float:
         """应用协同效应加成。"""
@@ -154,7 +167,7 @@ class _CalcMixin:
         return result
 
     def _apply_hero_dps(self, dps: float) -> float:
-        """应用英雄 DPS 加成（被动 + 装备）。"""
+        """应用英雄 DPS 加成（被动 + 装备词条/套装 + 平铺 bonus）。"""
         result = dps
         for hero_key, hstate in self.state.heroes.items():
             hdef = self.get_hero_info(hero_key)
@@ -162,15 +175,17 @@ class _CalcMixin:
                 bonus = hdef.get("passive_dps_bonus", 0)
                 if bonus:
                     result *= 1 + (bonus * hstate["level"])
-                eq = hstate.get("equipped")
-                if eq:
-                    result += eq.get("bonus", 0)
+                # 词条/套装 DPS 乘区
+                result *= self._hero_affix_factor(hstate, "dps_pct")
+                result *= self._hero_affix_factor(hstate, "all_pct")
+                # 平铺 bonus（旧式加成，仍保留）
+                for eq in hstate.get("equipped", {}).values():
+                    if eq:
+                        result += eq.get("bonus", 0)
         return result
 
     def _calc_click_power(self, dps: float, era: dict, challenge) -> float:
         """计算点击力。"""
-        from config import GOLDEN_BUFF
-
         challenge_restrict_click = challenge and challenge.get("restrict_click")
         if challenge_restrict_click:
             return 0
@@ -201,5 +216,53 @@ class _CalcMixin:
                 bonus = hdef.get("passive_click_bonus", 0)
                 if bonus:
                     cp *= 1 + (bonus * hstate["level"])
+                cp *= self._hero_affix_factor(hstate, "click_pct")
+                cp *= self._hero_affix_factor(hstate, "all_pct")
+
+        # ---- 成就 / 黄金 / 活动 / 挑战 乘区 ----
+        cp *= self._achievement_click_mult()
+        cp *= self._golden_click_mult()
+        cp *= self._hero_skill_click_mult()
+        cp *= self._event_click_mult()
+        cp *= self._challenge_global_click_mult()
 
         return int(cp)
+
+    def _achievement_dps_mult(self) -> float:
+        m = 1.0
+        for a in ACHIEVEMENTS:
+            if self.state.achievements.get(a["key"]):
+                if a["reward"]["type"] == "dps_mult":
+                    m *= (1 + a["reward"]["value"])
+        return m
+
+    def _achievement_click_mult(self) -> float:
+        m = 1.0
+        for a in ACHIEVEMENTS:
+            if self.state.achievements.get(a["key"]):
+                if a["reward"]["type"] == "click_mult":
+                    m *= (1 + a["reward"]["value"])
+        return m
+
+    def _golden_dps_mult(self) -> float:
+        if not self._golden_buff_active:
+            return 1.0
+        v = self._golden_variant_def()
+        if v and v["effect_type"] == "dps_mult":
+            return v["value"] * self._golden_power_factor()
+        return 1.0
+
+    def _golden_click_mult(self) -> float:
+        if not self._golden_buff_active:
+            return 1.0
+        v = self._golden_variant_def()
+        if v and v["effect_type"] == "click_mult":
+            return v["value"] * self._golden_power_factor()
+        return 1.0
+
+    def _golden_power_factor(self) -> float:
+        lv = self.state.upgrades.get("golden_power", 0)
+        return 1 + 0.25 * lv
+
+    def _golden_variant_def(self) -> dict | None:
+        return self._golden_variant

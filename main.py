@@ -5,7 +5,7 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 import time
-from config import WINDOW_WIDTH, WINDOW_HEIGHT, COLOR_BG, GAME_LOOP_MS
+from config import WINDOW_WIDTH, WINDOW_HEIGHT, COLOR_BG, GAME_LOOP_MS, AUTOSAVE_SECONDS
 from engine import GameEngine
 from ui import GameUI
 
@@ -27,11 +27,18 @@ class App:
             on_skill=self._on_skill,
             on_prestige=self._on_prestige_menu,
             on_hero=self._on_hero,
+            on_achievements=self._on_achievements,
+            on_daily=self._on_daily,
+            on_daily_tasks=self._on_daily_tasks,
+            on_hero_skill=self._on_hero_skill,
+            on_golden_click=self._on_golden_click,
         )
         self._full_draw()
+        self._show_offline_modal()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._last_tick = time.time()
+        self._last_autosave = time.time()
         self._game_loop()
 
     # ==================== 事件 ====================
@@ -61,6 +68,35 @@ class App:
                 err = self.engine.upgrade_hero(hero_key)
             if err:
                 messagebox.showinfo("英雄", err)
+
+    def _on_achievements(self):
+        self.ui.show_achievements(self.engine)
+
+    def _on_daily(self):
+        self.ui.show_daily(self.engine)
+
+    def _on_daily_tasks(self):
+        self.ui.show_daily_tasks(self.engine)
+
+    def _on_hero_skill(self, hero_key):
+        err = self.engine.activate_hero_skill(hero_key)
+        if err:
+            messagebox.showinfo("英雄技能", err)
+
+    def _on_golden_click(self):
+        self.engine.golden_button_clicked()
+
+    def _show_offline_modal(self):
+        s = self.engine.get_offline_summary()
+        if s["gold"] > 0 and s["seconds"] >= 60:
+            h = int(s["seconds"] // 3600)
+            m = int((s["seconds"] % 3600) // 60)
+            dur = f"{h}小时{m}分" if h else f"{m}分"
+            messagebox.showinfo(
+                "欢迎回来",
+                f"你离开了约 {dur}，挂机收益：\n"
+                f"{self.ui._fmt_gold(s['gold'])} 金币"
+            )
 
     def _on_prestige_menu(self):
         pts = self.engine.state.prestige_points
@@ -118,6 +154,9 @@ class App:
         self.ui.update_era_bar(self.engine)
         self.ui.update_skill_buttons(self.engine)
         self.ui.update_hero_panel(self.engine)
+        self.ui.update_hero_skill_buttons(self.engine)
+        self.ui.update_golden_button(self.engine)
+        self.ui.update_event_banner(self.engine)
         self.ui.update_equipment_bar(self.engine)
 
     def _game_loop(self):
@@ -130,6 +169,9 @@ class App:
         self.ui.update_era_bar(self.engine)
         self.ui.update_skill_buttons(self.engine)
         self.ui.update_hero_panel(self.engine)
+        self.ui.update_hero_skill_buttons(self.engine)
+        self.ui.update_golden_button(self.engine)
+        self.ui.update_event_banner(self.engine)
         self.ui.update_equipment_bar(self.engine)
         self.ui.update_golden_timer(
             self.engine.golden_buff_remaining,
@@ -137,6 +179,15 @@ class App:
         )
         self.ui.refresh_shop_if_needed(self.engine)
         self.ui.refresh_shop_buttons(self.engine)
+
+        # 自动保存（每 AUTOSAVE_SECONDS 秒）
+        if now - self._last_autosave >= AUTOSAVE_SECONDS:
+            self.engine.save()
+            self._last_autosave = now
+
+        # 弹出新解锁的成就提示
+        for name in self.engine.consume_pending_achievements():
+            self.ui.show_achievement_toast(name)
 
         self._last_tick = now
         self.root.after(GAME_LOOP_MS, self._game_loop)

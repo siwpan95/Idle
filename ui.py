@@ -13,12 +13,19 @@ from fonts import get_font
 
 class GameUI:
     def __init__(self, root: tk.Tk,
-                 on_buy, on_click, on_skill, on_prestige, on_hero):
+                 on_buy, on_click, on_skill, on_prestige, on_hero,
+                 on_achievements, on_daily, on_daily_tasks,
+                 on_hero_skill, on_golden_click):
         self._on_buy = on_buy
         self._on_click = on_click
         self._on_skill = on_skill
         self._on_prestige = on_prestige
         self._on_hero = on_hero
+        self._on_achievements = on_achievements
+        self._on_daily = on_daily
+        self._on_daily_tasks = on_daily_tasks
+        self._on_hero_skill = on_hero_skill
+        self._on_golden_click = on_golden_click
         self._active_category = "all"
 
         self.floaters: list[list] = []
@@ -112,7 +119,7 @@ class GameUI:
         )
 
         # 分类标签
-        tab_keys = ["all", "click", "dps", "multiplier", "synergy", "utility"]
+        tab_keys = ["all", "click", "dps", "multiplier", "synergy", "utility", "golden"]
         self._tab_ids = {}
         for i, cat_key in enumerate(tab_keys):
             ci = CATEGORIES.get(cat_key, {"name": cat_key})
@@ -196,6 +203,7 @@ class GameUI:
 
         # 英雄面板
         self._hero_btn_ids: dict = {}
+        self._hero_skill_btn_ids: dict = {}
         for i, h in enumerate(HEROES):
             hy = HERO_PANEL_Y + i * HERO_PANEL_SPACING
             rect = cv.create_rectangle(
@@ -212,6 +220,35 @@ class GameUI:
             self._hero_btn_ids[h["key"]] = (rect, txt, hy)
             cv.tag_bind(f"hero_{h['key']}", "<Button-1>",
                         lambda e, k=h["key"]: self._on_hero("upgrade", k))
+            # 英雄主动技能按钮（行右侧）
+            sx = HERO_PANEL_X + HERO_PANEL_W - HERO_PANEL_H + 2
+            sk = h.get("active_skill")
+            if sk:
+                srect = cv.create_rectangle(
+                    sx, hy + 2, sx + HERO_PANEL_H - 4, hy + HERO_PANEL_H - 2,
+                    fill="#333355", outline="#555", width=1,
+                    tags=(f"hskill_{h['key']}", "hskill_btns")
+                )
+                stxt = cv.create_text(
+                    sx + (HERO_PANEL_H - 4) // 2, hy + HERO_PANEL_H // 2,
+                    text=sk["icon"], fill="#888", font=get_font(9),
+                    tags=(f"hskill_{h['key']}", "hskill_btns")
+                )
+                self._hero_skill_btn_ids[h["key"]] = (srect, stxt, sk)
+                cv.tag_bind(f"hskill_{h['key']}", "<Button-1>",
+                            lambda e, k=h["key"]: self._on_hero_skill(k))
+
+        # 黄金按钮（默认隐藏，出现时显示在面板右上角）
+        self._golden_btn = cv.create_oval(
+            PANEL_WIDTH - 46, 8, PANEL_WIDTH - 10, 44,
+            fill="#ffaa00", outline="#fff", width=2, state="hidden",
+            tags=("golden_btn",)
+        )
+        self._golden_btn_txt = cv.create_text(
+            PANEL_WIDTH - 28, 26, text="", fill="#000", font=get_font(13),
+            state="hidden", tags=("golden_btn",)
+        )
+        cv.tag_bind("golden_btn", "<Button-1>", lambda e: self._on_golden_click())
 
         # 转生按钮
         cv.create_rectangle(
@@ -234,8 +271,24 @@ class GameUI:
         cv.create_text(10, EQUIP_PANEL_Y + 2, anchor="w",
                        text="🎒", fill="#888", font=get_font(10),
                        tags="equip_label")
+
+        # 成就 / 每日 / 日常任务 入口按钮
+        cv.create_text(40, EQUIP_PANEL_Y + 2, anchor="w",
+                       text="🏆", fill="#ffd369", font=get_font(12),
+                       tags=("ach_btn",))
+        cv.tag_bind("ach_btn", "<Button-1>", lambda e: self._on_achievements())
+        cv.create_text(70, EQUIP_PANEL_Y + 2, anchor="w",
+                       text="📅", fill="#10b981", font=get_font(12),
+                       tags=("daily_btn",))
+        cv.tag_bind("daily_btn", "<Button-1>", lambda e: self._on_daily())
+        cv.create_text(100, EQUIP_PANEL_Y + 2, anchor="w",
+                       text="📋", fill="#0ea5e9", font=get_font(12),
+                       tags=("dailytask_btn",))
+        cv.tag_bind("dailytask_btn", "<Button-1>", lambda e: self._on_daily_tasks())
+
         self._equip_tids: list = []
         self._prestige_status_tid: int = 0
+        self._event_banner_tid: int = 0
 
     # =========================== 面板刷新 ===========================
 
@@ -280,6 +333,55 @@ class GameUI:
             cv.itemconfig(rect, fill=cf)
             cv.itemconfig(txt, text=label, fill=ct)
 
+    def update_hero_skill_buttons(self, engine):
+        cv = self.panel_cv
+        for key, (rect, txt, sk) in self._hero_skill_btn_ids.items():
+            hstate = engine.get_hero_state(key)
+            if hstate["level"] <= 0:
+                cv.itemconfig(rect, fill="#222", outline="#333")
+                cv.itemconfig(txt, text="🔒", fill="#444")
+                continue
+            cd = engine.get_hero_skill_cooldown(key)
+            ar = engine.get_hero_skill_active_remaining(key)
+            if ar > 0:
+                c, t, tc = COLOR_SKILL_ACTIVE, f"{int(ar)}s", "white"
+            elif cd > 0:
+                c, t, tc = COLOR_SKILL_COOLDOWN, f"{int(cd)}s", "#888"
+            else:
+                c, t, tc = COLOR_SKILL_READY, sk["icon"], "white"
+            cv.itemconfig(rect, fill=c)
+            cv.itemconfig(txt, text=t, fill=tc)
+
+    def update_golden_button(self, engine):
+        cv = self.panel_cv
+        if engine.golden_button_visible:
+            cv.itemconfig(self._golden_btn, state="normal")
+            cv.itemconfig(self._golden_btn_txt, state="normal")
+            v = engine.golden_variant
+            icon = v["icon"] if v else "✨"
+            cv.itemconfig(self._golden_btn_txt, text=icon)
+        else:
+            cv.itemconfig(self._golden_btn, state="hidden")
+            cv.itemconfig(self._golden_btn_txt, state="hidden")
+        # 增益提示（含变体名/剩余）
+        if engine.golden_buff_active and engine.golden_variant:
+            vt = f"✨{engine.golden_variant['name']} {engine.golden_buff_remaining:.0f}s"
+        else:
+            vt = ""
+        cv.itemconfig("golden_timer", text=vt)
+
+    def update_event_banner(self, engine):
+        cv = self.top_cv
+        ev = engine.get_active_event()
+        cv.delete("event_banner")
+        if ev:
+            cv.create_text(
+                400, 30, anchor="w",
+                text=f"🎊 {ev['icon']} {ev['name']} · {max(0,int(engine.state.event_remaining))}s",
+                fill="#ffd369", font=get_font(10, True),
+                tags="event_banner"
+            )
+
     def update_golden_timer(self, remaining: float, active: bool):
         t = f"增益: {remaining:.0f}s" if active else ""
         self.panel_cv.itemconfig("golden_timer", text=t)
@@ -294,11 +396,17 @@ class GameUI:
 
         eqs = engine.get_equipment()
         show = eqs[-EQUIP_MAX_SHOW:] if len(eqs) > EQUIP_MAX_SHOW else eqs
+        slot_icon = {s["key"]: s["icon"] for s in EQUIPMENT_SLOTS}
         for i, eq in enumerate(show):
             ex = 30 + i * (EQUIP_ITEM_W + EQUIP_SPACING)
+            icon = slot_icon.get(eq.get("slot", ""), "")
+            aff = len(eq.get("affixes", []))
+            label = f"{icon}{eq['name']} +{eq['bonus']}"
+            if aff:
+                label += f"·{aff}词"
             tid = cv.create_text(
                 ex, EQUIP_PANEL_Y + 2, anchor="w",
-                text=f"{eq['name']} +{eq['bonus']}",
+                text=label,
                 fill=eq["color"], font=get_font(8)
             )
             self._equip_tids.append(tid)
@@ -447,6 +555,165 @@ class GameUI:
         messagebox.showinfo("声望商店",
             f"声望: {engine.state.prestige_points}\n\n" + "\n".join(lines))
 
+    # =========================== 成就面板 ===========================
+
+    def show_achievements(self, engine):
+        win = tk.Toplevel()
+        win.title("成就")
+        win.geometry("440x540")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+
+        done, total = engine.achievement_progress()
+        head = tk.Label(win, text=f"成就进度  {done}/{total}",
+                        bg=COLOR_BG, fg=COLOR_GOLD, font=get_font(13, True))
+        head.pack(pady=(10, 4))
+
+        txt = tk.Text(win, bg=COLOR_PANEL, fg="white", relief="flat",
+                      font=get_font(10), wrap="none", cursor="arrow")
+        txt.tag_config("unlocked", foreground="#10b981")
+        txt.tag_config("locked", foreground="#888888")
+        txt.tag_config("reward", foreground="#ffd369")
+        sb = tk.Scrollbar(win, command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=6)
+        sb.pack(side=tk.RIGHT, fill=tk.Y, pady=6)
+
+        for a in engine.get_achievements():
+            tag = "unlocked" if a["unlocked"] else "locked"
+            mark = "✔ " if a["unlocked"] else "✖ "
+            line = f"{mark}{a['icon']} {a['name']}  —  {a['desc']}\n"
+            line += f"    奖励: {a['reward']}\n\n"
+            txt.insert("end", line, tag)
+        txt.configure(state="disabled")
+
+    # =========================== 每日面板 ===========================
+
+    def show_daily(self, engine):
+        status = engine.get_daily_status()
+        win = tk.Toplevel()
+        win.title("每日奖励")
+        win.geometry("360x240")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+
+        tk.Label(win, text="📅 每日登录奖励", bg=COLOR_BG, fg=COLOR_GOLD,
+                 font=get_font(13, True)).pack(pady=(12, 4))
+        streak_lbl = tk.Label(win, text="", bg=COLOR_BG, fg="white",
+                              font=get_font(12))
+        streak_lbl.pack(pady=2)
+        prev_lbl = tk.Label(win, text="", bg=COLOR_BG, fg="#aaa",
+                            font=get_font(10))
+        prev_lbl.pack(pady=2)
+
+        def refresh():
+            st = engine.get_daily_status()
+            if st["claimed_today"]:
+                streak_lbl.configure(text=f"今日已领取 · 连击 {st['streak']} 天")
+            else:
+                streak_lbl.configure(text=f"当前连击 {st['streak']} 天"
+                                            f"（满 7 天额外 +1 声望）")
+            prev_lbl.configure(
+                text=f"下次领取约可得 {self._fmt_gold(st['preview'])} 金币"
+            )
+            btn.configure(state="disabled" if st["claimed_today"] else "normal")
+
+        def claim():
+            res = engine.claim_daily()
+            if isinstance(res, str):
+                messagebox.showinfo("每日奖励", res)
+                return
+            msg = (f"领取成功！连击 {res['streak']} 天\n"
+                   f"获得 {self._fmt_gold(res['gold'])} 金币")
+            if res["bonus_prestige"]:
+                msg += "\n额外 +1 声望（满 7 天奖励）"
+            messagebox.showinfo("每日奖励", msg)
+            refresh()
+
+        btn = tk.Button(win, text="领取", command=claim,
+                        bg=COLOR_BTN_BG, fg="white", font=get_font(11, True),
+                        activebackground="#0f3460", relief="flat", width=14)
+        btn.pack(pady=10)
+        refresh()
+
+    # =========================== 日常任务面板 ===========================
+
+    def show_daily_tasks(self, engine):
+        win = tk.Toplevel()
+        win.title("日常任务")
+        win.geometry("420x460")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+
+        tk.Label(win, text="📋 每日任务", bg=COLOR_BG, fg=COLOR_GOLD,
+                 font=get_font(13, True)).pack(pady=(12, 2))
+        tk.Label(win, text="每日 0 点刷新，完成后领取奖励", bg=COLOR_BG,
+                 fg="#aaa", font=get_font(9)).pack(pady=(0, 6))
+
+        frame = tk.Frame(win, bg=COLOR_BG)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10)
+
+        def refresh():
+            for w in list(frame.children.values()):
+                w.destroy()
+            for t in engine.get_daily_tasks():
+                row = tk.Frame(frame, bg=COLOR_PANEL)
+                row.pack(fill=tk.X, pady=3, padx=2)
+                head = tk.Frame(row, bg=COLOR_PANEL)
+                head.pack(fill=tk.X)
+                mark = "✔" if t["claimed"] else ("✓" if t["complete"] else "○")
+                tk.Label(head, text=f"{mark} {t['name']}", bg=COLOR_PANEL,
+                         fg="#10b981" if t["claimed"] else "white",
+                         font=get_font(11, True), anchor="w").pack(side=tk.LEFT)
+                rw = t["reward"]
+                rtxt = f"+{rw['value']}声望" if rw["type"] == "prestige" else f"+{rw['value']}金"
+                tk.Label(head, text=rtxt, bg=COLOR_PANEL, fg=COLOR_GOLD,
+                         font=get_font(9)).pack(side=tk.RIGHT)
+                tk.Label(row, text=f"{t['desc']}  ({t['progress']}/{t['target']})",
+                         bg=COLOR_PANEL, fg="#aaa", font=get_font(9),
+                         anchor="w").pack(fill=tk.X)
+                prog = tk.Frame(row, bg="#0c0c1e", height=6)
+                prog.pack(fill=tk.X, pady=(2, 0))
+                frac = min(1.0, t["progress"] / t["target"])
+                tk.Frame(prog, bg=COLOR_SKILL_READY, width=int(380 * frac),
+                         height=6).pack(side=tk.LEFT)
+                if not t["claimed"]:
+                    btxt = "领取" if t["complete"] else "未完成"
+                    b = tk.Button(row, text=btxt, command=lambda k=t["key"]: do_claim(k),
+                                 bg=COLOR_BTN_BG, fg="white", font=get_font(9),
+                                 relief="flat", state="normal" if t["complete"] else "disabled")
+                    b.pack(pady=(3, 0))
+
+        def do_claim(key):
+            res = engine.claim_daily_task(key)
+            if isinstance(res, str):
+                messagebox.showinfo("日常任务", res)
+                return
+            messagebox.showinfo("日常任务", f"完成「{res['name']}」！")
+            refresh()
+
+        refresh()
+
+    def show_achievement_toast(self, name):
+        win = tk.Toplevel()
+        win.title("")
+        win.overrideredirect(True)
+        win.geometry("260x54")
+        try:
+            x = self.top_cv.winfo_rootx() + WINDOW_WIDTH // 2 - 130
+            y = self.top_cv.winfo_rooty() + 80
+            win.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+        f = tk.Frame(win, bg="#1a1a3e", highlightbackground="#ffd369",
+                     highlightthickness=1)
+        f.pack(fill=tk.BOTH, expand=True)
+        tk.Label(f, text="🏆 成就解锁", bg="#1a1a3e", fg="#ffd369",
+                 font=get_font(11, True)).pack(pady=(4, 0))
+        tk.Label(f, text=name, bg="#1a1a3e", fg="white",
+                 font=get_font(12, True)).pack(pady=(2, 6))
+        win.after(2600, win.destroy)
+
     # =========================== 内部 ===========================
 
     def _clear_shop(self):
@@ -459,6 +726,12 @@ class GameUI:
         l = l.replace("{qty}", str(qty))
         if d.per_second > 0:
             l += f" (+{self._fmt_dps(d.per_second)}/s)"
+            nxt = None
+            for count, _ in MILESTONE_STEPS:
+                if qty < count:
+                    nxt = count
+                    break
+            l += f" 🎯{qty}/{nxt}" if nxt is not None else " 🎯MAX"
         return l
 
     def _on_mousewheel(self, event):

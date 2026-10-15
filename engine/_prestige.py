@@ -40,6 +40,18 @@ class _PrestigeMixin:
                 return ch
         return None
 
+    def _challenge_global_dps_mult(self) -> float:
+        ch = self._get_challenge()
+        if ch:
+            return ch.get("global_dps_mult", 1.0)
+        return 1.0
+
+    def _challenge_global_click_mult(self) -> float:
+        ch = self._get_challenge()
+        if ch:
+            return ch.get("global_click_mult", 1.0)
+        return 1.0
+
     def start_challenge(self, challenge_key: str) -> str | None:
         ch = None
         for c in CHALLENGES:
@@ -67,22 +79,60 @@ class _PrestigeMixin:
     def prestige(self) -> str | None:
         if self.state.total_gold < 1000:
             return "总收益太低，需要至少 1000 金币才能转生"
+        ch = self._get_challenge()
+        if ch and self.state.challenge_completed:
+            self.state.stats["challenges"] += 1
         pts = self.get_prestige_formula()
         self.state.prestige_points += pts
+        self.state.stats["prestiges"] += 1
         self._do_prestige_reset()
         self._update_era()
         self._recalc()
         return None
 
     def _do_prestige_reset(self):
-        """重置游戏进度，保留声望。"""
+        """重置游戏进度，保留声望与永久/累积字段。"""
         pts = self.state.prestige_points
         p_upgs = dict(self.state.prestige_upgrades)
+        # ---- 永久/累积字段：跨转生保留 ----
+        ach = dict(self.state.achievements)
+        stats = dict(self.state.stats)
+        lg = self.state.lifetime_gold
+        mei = self.state.max_era_index
+        dl = self.state.daily_last_date
+        ds = self.state.daily_streak
+        dc = self.state.daily_claimed_date
+        # ---- P1：日常任务 / 活动（按日期或全局，跨转生保留）----
+        dtasks = dict(self.state.daily_tasks)
+        dtasks_date = self.state.daily_tasks_date
+        dclicks = self.state.daily_clicks
+        dupgs = self.state.daily_upgrades
+        dchalls = self.state.daily_challenges
+        ev_key = self.state.event_key
+        ev_rem = self.state.event_remaining
+        ev_gap = self.state.event_gap
+
         self.state = GameState()
         self.state.prestige_points = pts
         self.state.prestige_upgrades = p_upgs
+        self.state.achievements = ach
+        self.state.stats = stats
+        self.state.lifetime_gold = lg
+        self.state.max_era_index = mei
+        self.state.daily_last_date = dl
+        self.state.daily_streak = ds
+        self.state.daily_claimed_date = dc
+        self.state.daily_tasks = dtasks
+        self.state.daily_tasks_date = dtasks_date
+        self.state.daily_clicks = dclicks
+        self.state.daily_upgrades = dupgs
+        self.state.daily_challenges = dchalls
+        self.state.event_key = ev_key
+        self.state.event_remaining = ev_rem
+        self.state.event_gap = ev_gap
         self._init_state()
         self._init_heroes()
+        self._init_events()
         self._equip_drop_timer = 0.0
         self._skill_cooldowns = {k: 0.0 for k in self._skill_cooldowns}
         self._skill_active_until = {k: 0.0 for k in self._skill_active_until}
@@ -96,6 +146,10 @@ class _PrestigeMixin:
         self._golden_buff_remaining = 0.0
         self._golden_button_visible = False
         self._golden_button_timer = 0.0
+        self._golden_variant = None
+        self._hero_skill_cooldowns = {}
+        self._hero_skill_active = {}
+        self._hero_skill_effect = {}
         self._schedule_golden_button()
         # 声望起始金币
         for pdef in PRESTIGE_UPGRADES:

@@ -15,6 +15,8 @@ class _EraMixin:
         for i, era in enumerate(ERAS):
             if self.state.total_gold >= era["threshold"]:
                 self._era_index = i
+        if self._era_index > self.state.max_era_index:
+            self.state.max_era_index = self._era_index
 
     def get_current_era(self) -> EraDef:
         return ERAS[self._era_index]

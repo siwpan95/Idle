@@ -3,8 +3,9 @@
 """
 
 import time
+import random
 from config import (
-    UPGRADE_DEFS, SKILLS, GOLDEN_BUFF, TICK_DT_MAX,
+    UPGRADE_DEFS, SKILLS, GOLDEN_BUFF, TICK_DT_MAX, OFFLINE_CAP_SECONDS,
 )
 from .state import GameState
 from .upgrade import UpgradeDef
@@ -17,6 +18,13 @@ from ._prestige import _PrestigeMixin
 from ._persistence import _PersistenceMixin
 from ._golden import _GoldenMixin
 from ._equipment import _EquipmentMixin
+from ._achievements import _AchievementsMixin
+from ._daily import _DailyMixin
+from ._events import _EventsMixin
+from ._dailytasks import _DailyTasksMixin
+
+
+CRIT_MULT = 7  # 暴击倍率（来自装备/英雄词条）
 
 
 class GameEngine(
@@ -28,13 +36,17 @@ class GameEngine(
     _PersistenceMixin,
     _GoldenMixin,
     _EquipmentMixin,
+    _AchievementsMixin,
+    _DailyMixin,
+    _EventsMixin,
+    _DailyTasksMixin,
 ):
     """放置英雄核心引擎。"""
 
     def __init__(self):
         self.state = GameState()
         self._defs: dict[str, UpgradeDef] = {}
-        self._dps_gears: list[UpgradeDef] = []
+        self._dps_gears: list = []
 
         # 纪元
         self._era_index: int = 0
@@ -54,28 +66,82 @@ class GameEngine(
         self._golden_buff_remaining = 0.0
         self._golden_button_visible = False
         self._golden_button_timer = 0.0
+        self._golden_variant: dict | None = None
+
+        # 英雄主动技能
+        self._hero_skill_cooldowns: dict[str, float] = {}
+        self._hero_skill_active: dict[str, float] = {}
+        self._hero_skill_effect: dict[str, tuple] = {}
+
+        # 限时活动
+        self._event_cyc: int = 0
 
         self._load_defs()
         self._init_state()
         self._init_heroes()
         self._equip_drop_timer: float = 0.0
+        self._pending_achievements: list = []
+        self._offline_seconds: float = 0.0
+        self._offline_gold: float = 0.0
+        self._prev_challenge_completed: bool = False
         self._load()
         self._update_era()
         self._recalc()
+        self._compute_offline()
+        self._init_events()
         self._schedule_golden_button()
+
+    # ==================== 金币记账（统一乘区） ====================
+
+    def _gold_gain_mult(self) -> float:
+        return (
+            self._affix_gold_mult()
+            * self._golden_gold_mult()
+            * self._event_gold_mult()
+        )
+
+    def _add_gold(self, amount: float, lifetime: bool = True) -> float:
+        g = amount * self._gold_gain_mult()
+        self.state.gold += g
+        self.state.total_gold += g
+        if lifetime:
+            self.state.lifetime_gold += g
+        return g
 
     # ==================== 操作 ====================
 
     def click(self) -> int:
         gain = self.state.click_power
-        if self._crit_charges > 0:
-            gain = int(gain * self._crit_mult)
-            self._crit_charges -= 1
-            if self._crit_charges <= 0:
-                self._crit_mult = 1.0
-        self.state.gold += gain
-        self.state.total_gold += gain
+        # 暴击（装备/英雄词条）
+        chance = self._affix_crit_chance()
+        crit = chance > 0 and (random.random() < chance)
+        if crit:
+            gain = int(gain * CRIT_MULT)
+        self._add_gold(gain)
+        self.state.stats["clicks"] += 1
+        self._inc_daily_clicks(1)
         return gain
+
+    # ==================== 离线收益 ====================
+
+    def _compute_offline(self):
+        """根据存档时间戳计算离线收益（上限 OFFLINE_CAP_SECONDS）。"""
+        ts = self.state.last_save_ts
+        now = time.time()
+        if ts <= 0 or ts > now:
+            return
+        elapsed = now - ts
+        capped = min(elapsed, OFFLINE_CAP_SECONDS)
+        if capped < 60:
+            return
+        gain = self.state.dps * capped
+        self._add_gold(gain)
+        self._offline_seconds = capped
+        self._offline_gold = gain
+
+    def get_offline_summary(self) -> dict:
+        """返回离线结算信息，供 UI 弹窗使用。"""
+        return {"seconds": self._offline_seconds, "gold": self._offline_gold}
 
     def tick(self, now: float) -> float:
         dt = now - self.state.last_tick
@@ -84,8 +150,7 @@ class GameEngine(
             dt = TICK_DT_MAX
 
         # DPS 产金
-        self.state.gold += self.state.dps * dt
-        self.state.total_gold += self.state.dps * dt
+        self._add_gold(self.state.dps * dt)
 
         # 装备掉落检测
         self._equip_drop_timer += dt
@@ -103,12 +168,14 @@ class GameEngine(
                 if self._skill_active_until[key] <= 0:
                     self._deactivate_skill(key)
 
+        # 英雄主动技能
+        self._tick_hero_skills(dt)
+
         # 自动点击
         if self._auto_click_remaining > 0:
             self._auto_click_remaining -= dt
             gold_per_tick = self.state.click_power * self._auto_click_rate * dt
-            self.state.gold += gold_per_tick
-            self.state.total_gold += gold_per_tick
+            self._add_gold(gold_per_tick)
             if self._auto_click_remaining <= 0:
                 self._auto_click_rate = 0.0
 
@@ -116,8 +183,7 @@ class GameEngine(
         if self._golden_buff_active:
             self._golden_buff_remaining -= dt
             if self._golden_buff_remaining <= 0:
-                self._golden_buff_active = False
-                self._recalc()
+                self._deactivate_golden()
 
         # 黄金按钮
         if not self._golden_button_visible:
@@ -132,21 +198,40 @@ class GameEngine(
                 self._golden_button_visible = False
                 self._schedule_golden_button()
 
-        # 挑战时间限制
+        # 限时活动
+        self.tick_events(dt)
+        # 日常任务刷新
+        self.refresh_daily_tasks_if_needed()
+
+        # 挑战完成判定
         challenge = self._get_challenge()
-        if challenge and challenge.get("time_limit"):
-            elapsed = now - self.state.challenge_start_time
-            target_era_key = challenge["target_era"]
-            if self.is_era_unlocked(target_era_key):
-                self.state.challenge_completed = True
-            elif elapsed > challenge["time_limit"]:
-                self.state.challenge_completed = False
+        if challenge:
+            if challenge.get("time_limit"):
+                elapsed = now - self.state.challenge_start_time
+                target_era_key = challenge["target_era"]
+                if self.is_era_unlocked(target_era_key):
+                    self.state.challenge_completed = True
+                elif elapsed > challenge["time_limit"]:
+                    self.state.challenge_completed = False
+            else:
+                target = challenge.get("target_era")
+                if target:
+                    self.state.challenge_completed = self.is_era_unlocked(target)
+                else:
+                    self.state.challenge_completed = (self._era_index >= 1)
+            # 完成瞬间计入今日挑战计数
+            if self.state.challenge_completed and not self._prev_challenge_completed:
+                self._inc_daily_challenges(1)
+            self._prev_challenge_completed = self.state.challenge_completed
 
         # 纪元检测
         old_era = self._era_index
         self._update_era()
         if self._era_index != old_era:
             self._recalc()
+
+        # 成就检测
+        self._check_achievements()
 
         return dt
 
@@ -193,10 +278,12 @@ class GameEngine(
             return f"{d.name} 需要 {fmt_gold(cost)} 金币"
         self.state.gold -= cost
         self.state.upgrades[key] = qty + 1
+        self.state.stats["total_upgrades"] += 1
+        self._inc_daily_upgrades(1)
         if d.empowers:
             self.state.empowered[d.empowers.key] += 1
         if d.callback == "golden":
-            self._activate_golden()
+            self._activate_golden(self._pick_golden_variant())
         self._recalc()
         return None
 

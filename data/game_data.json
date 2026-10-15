@@ -114,7 +114,11 @@
     "tick_dt_max": 1.0,
     "game_loop_ms": 30,
     "hero_panel_scroll_h": 420,
-    "shop_scroll_padding": 20
+    "shop_scroll_padding": 20,
+    "offline_cap_seconds": 28800,
+    "milestone_steps": [[25, 1.5], [50, 2.0], [100, 3.0], [200, 5.0]],
+    "daily_reward_seconds": 600,
+    "autosave_seconds": 30
   },
   "save_file": "idle_save.json",
   "golden_buff": {
@@ -154,6 +158,11 @@
       "name": "功能",
       "color": "#10b981",
       "icon": "◆"
+    },
+    "golden": {
+      "name": "黄金",
+      "color": "#ffaa00",
+      "icon": "✨"
     }
   },
   "eras": [
@@ -342,7 +351,16 @@
       "upgrade_cost": 25,
       "upgrade_mult": 1.5,
       "max_level": 50,
-      "passive_dps_bonus": 0.1
+      "passive_dps_bonus": 0.1,
+      "active_skill": {
+        "key": "mage_nova",
+        "name": "奥术新星",
+        "tip": "DPS x2 持续 8 秒",
+        "effect_type": "dps_mult",
+        "value": 2,
+        "duration": 8,
+        "cooldown": 90
+      }
     },
     {
       "key": "paladin",
@@ -354,7 +372,16 @@
       "upgrade_cost": 100,
       "upgrade_mult": 1.5,
       "max_level": 50,
-      "passive_click_bonus": 0.2
+      "passive_click_bonus": 0.2,
+      "active_skill": {
+        "key": "paladin_aegis",
+        "name": "圣盾庇佑",
+        "tip": "点击力 x50 持续 10 秒",
+        "effect_type": "click_mult",
+        "value": 50,
+        "duration": 10,
+        "cooldown": 120
+      }
     },
     {
       "key": "ranger",
@@ -367,7 +394,15 @@
       "upgrade_mult": 1.5,
       "max_level": 50,
       "passive_dps_bonus": 0.25,
-      "crit_chance": 0.1
+      "crit_chance": 0.1,
+      "active_skill": {
+        "key": "ranger_volley",
+        "name": "箭雨",
+        "tip": "立刻获得 25 秒 DPS",
+        "effect_type": "instant_dps",
+        "value": 25,
+        "cooldown": 100
+      }
     },
     {
       "key": "berserker",
@@ -380,7 +415,16 @@
       "upgrade_mult": 1.5,
       "max_level": 50,
       "passive_dps_bonus": 0.15,
-      "passive_click_bonus": 0.3
+      "passive_click_bonus": 0.3,
+      "active_skill": {
+        "key": "berserker_rage",
+        "name": "狂暴",
+        "tip": "DPS x3 持续 10 秒",
+        "effect_type": "dps_mult",
+        "value": 3,
+        "duration": 10,
+        "cooldown": 120
+      }
     }
   ],
   "equipment_tiers": [
