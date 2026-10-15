@@ -9,13 +9,15 @@ import random
 import time
 from config import *
 from fonts import get_font
+from engine.fmt import fmt_num
 
 
 class GameUI:
     def __init__(self, root: tk.Tk,
                  on_buy, on_click, on_skill, on_prestige, on_hero,
                  on_achievements, on_daily, on_daily_tasks,
-                 on_hero_skill, on_golden_click):
+                 on_hero_skill, on_golden_click,
+                 on_stats, on_save, on_toggle_sound, on_import_done):
         self._on_buy = on_buy
         self._on_click = on_click
         self._on_skill = on_skill
@@ -26,7 +28,15 @@ class GameUI:
         self._on_daily_tasks = on_daily_tasks
         self._on_hero_skill = on_hero_skill
         self._on_golden_click = on_golden_click
+        self._on_stats = on_stats
+        self._on_save = on_save
+        self._on_toggle_sound = on_toggle_sound
+        self._on_import_done = on_import_done
         self._active_category = "all"
+        self.buy_mode = 1  # 购买数量模式：1 / 10 / 100 / "max"
+        self._sound_on = False
+        self._mode_btn_ids: dict = {}
+        self._util_btn_ids: dict = {}
 
         self.floaters: list[list] = []
 
@@ -139,6 +149,37 @@ class GameUI:
                         lambda e, k=cat_key: self._set_category(k))
         self._highlight_active_tab()
 
+        # ---- P2：顶栏右侧 — 购买数量模式 + 实用按钮 ----
+        mode_defs = [("×1", 1), ("×10", 10), ("×100", 100), ("Max", "max")]
+        mx = 640
+        for label, m in mode_defs:
+            tag = f"mode_{m}"
+            rect = cv.create_rectangle(
+                mx, 6, mx + 44, 26, fill=COLOR_TAB_INACTIVE, outline="", tags=(tag,))
+            txt = cv.create_text(
+                mx + 22, 16, text=label, fill=COLOR_TAB_TEXT,
+                font=get_font(9), tags=(tag,))
+            self._mode_btn_ids[m] = (rect, txt)
+            cv.tag_bind(tag, "<Button-1>", lambda e, mm=m: self.set_buy_mode(mm))
+            mx += 46
+
+        util_defs = [
+            ("📊", self._on_stats), ("💾", self._on_save), ("🔊", self._toggle_sound_btn),
+        ]
+        ux = 842
+        for icon, cb in util_defs:
+            tag = f"util_{icon}"
+            rect = cv.create_rectangle(
+                ux, 6, ux + 30, 26, fill=COLOR_TAB_INACTIVE, outline="", tags=(tag,))
+            txt = cv.create_text(
+                ux + 15, 16, text=icon, fill=COLOR_TAB_TEXT,
+                font=get_font(10), tags=(tag,))
+            self._util_btn_ids[icon] = (rect, txt)
+            cv.tag_bind(tag, "<Button-1>", lambda e, c=cb: c())
+            ux += 34
+
+        self.update_buy_mode()
+
     def update_era_bar(self, engine):
         era = engine.get_current_era()
         nxt = engine.get_next_era()
@@ -161,6 +202,23 @@ class GameUI:
             a = (cat_key == self._active_category)
             self.top_cv.itemconfig(rect, fill=COLOR_TAB_ACTIVE if a else COLOR_TAB_INACTIVE)
             self.top_cv.itemconfig(txt, fill="white" if a else COLOR_TAB_TEXT)
+
+    def set_buy_mode(self, m):
+        self.buy_mode = m
+        self.update_buy_mode()
+
+    def update_buy_mode(self):
+        for m, (rect, txt) in self._mode_btn_ids.items():
+            a = (m == self.buy_mode)
+            self.top_cv.itemconfig(rect, fill=COLOR_TAB_ACTIVE if a else COLOR_TAB_INACTIVE)
+            self.top_cv.itemconfig(txt, fill="white" if a else COLOR_TAB_TEXT)
+
+    def _toggle_sound_btn(self):
+        if self._on_toggle_sound:
+            self._sound_on = self._on_toggle_sound()
+            rect, txt = self._util_btn_ids.get("🔊", (None, None))
+            if txt is not None:
+                self.top_cv.itemconfig(txt, text="🔊" if self._sound_on else "🔇")
 
     # =========================== 右面板绘制 ===========================
 
@@ -532,9 +590,64 @@ class GameUI:
 
     # =========================== 对话框 ===========================
 
-    def show_prestige_dialog(self, engine):
-        return messagebox.askyesno("转生",
-            f"重置进度，获得 {engine.get_prestige_formula()} 声望。确定？")
+    def show_prestige_dialog(self, engine) -> bool:
+        """转生预览对话框：展示可获声望与可购项，返回是否确认。"""
+        pv = engine.get_prestige_preview()
+        win = tk.Toplevel()
+        win.title("转生预览")
+        win.geometry("380x460")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+
+        tk.Label(win, text="🔄 转生预览", bg=COLOR_BG, fg=COLOR_GOLD,
+                 font=get_font(15, True)).pack(pady=(12, 2))
+
+        ov = (f"当前声望:  {fmt_num(pv['current_points'])}\n"
+              f"转生将获得:  {fmt_num(pv['gain'])}\n"
+              f"转生后合计:  {fmt_num(pv['will_have'])}")
+        tk.Label(win, text=ov, bg=COLOR_BG, fg="white",
+                 font=get_font(11), justify="left").pack(pady=8)
+
+        tk.Label(win, text="— 声望商店可购项 —", bg=COLOR_BG, fg=COLOR_GOLD,
+                 font=get_font(11, True)).pack(pady=(4, 2))
+
+        if pv["buyable"]:
+            txt = tk.Text(win, bg=COLOR_PANEL, fg="white", relief="flat",
+                          font=get_font(10), wrap="none", cursor="arrow",
+                          height=12)
+            txt.tag_config("ok", foreground="#10b981")
+            txt.tag_config("no", foreground="#888888")
+            sb = tk.Scrollbar(win, command=txt.yview)
+            txt.configure(yscrollcommand=sb.set)
+            for p in pv["buyable"]:
+                tag = "ok" if p["affordable"] else "no"
+                mark = "✔ " if p["affordable"] else "✖ "
+                txt.insert("end", f"{mark}{p['name']}  —  {p['cost']} 声望\n", tag)
+            txt.configure(state="disabled")
+            txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=4)
+            sb.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
+        else:
+            tk.Label(win, text="（暂无更多可购项）", bg=COLOR_BG, fg="#888888",
+                     font=get_font(10)).pack(pady=10)
+
+        result = {"ok": False}
+
+        def confirm():
+            result["ok"] = True
+            win.destroy()
+
+        btns = tk.Frame(win, bg=COLOR_BG)
+        btns.pack(pady=(6, 12))
+        tk.Button(btns, text="取消", command=win.destroy,
+                  bg="#444444", fg="white", font=get_font(11),
+                  width=10, relief="flat").pack(side=tk.LEFT, padx=8)
+        tk.Button(btns, text="确认转生", command=confirm,
+                  bg=COLOR_GOLD, fg="#1a1a1a", font=get_font(11, True),
+                  width=12, relief="flat").pack(side=tk.LEFT, padx=8)
+
+        win.grab_set()
+        win.wait_window()
+        return result["ok"]
 
     def show_challenge_dialog(self, engine) -> str | None:
         chs = engine.get_challenges()
@@ -714,6 +827,125 @@ class GameUI:
                  font=get_font(12, True)).pack(pady=(2, 6))
         win.after(2600, win.destroy)
 
+    # =========================== 统计面板 ===========================
+
+    @staticmethod
+    def _fmt_playtime(sec):
+        sec = int(sec)
+        h = sec // 3600
+        m = (sec % 3600) // 60
+        s = sec % 60
+        if h:
+            return f"{h}小时{m}分"
+        if m:
+            return f"{m}分{s}秒"
+        return f"{s}秒"
+
+    def show_stats(self, engine):
+        s = engine.state
+        win = tk.Toplevel()
+        win.title("统计")
+        win.geometry("360x430")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+
+        tk.Label(win, text="📊 游戏统计", bg=COLOR_BG, fg=COLOR_GOLD,
+                 font=get_font(13, True)).pack(pady=(12, 6))
+
+        rows = [
+            ("总点击", f"{s.stats['clicks']:,}"),
+            ("游戏时长", self._fmt_playtime(s.play_time)),
+            ("累计获得金币", self._fmt_gold(s.lifetime_gold)),
+            ("历史总收益", self._fmt_gold(s.total_gold)),
+            ("掉落装备", f"{s.stats['drops']:,}"),
+            ("转生次数", f"{s.stats['prestiges']:,}"),
+            ("完成挑战", f"{s.stats['challenges']:,}"),
+            ("购买升级", f"{s.stats['total_upgrades']:,}"),
+            ("声望点数", f"{s.prestige_points:,}"),
+        ]
+        f = tk.Frame(win, bg=COLOR_BG)
+        f.pack(fill=tk.X, padx=16)
+        for k, v in rows:
+            r = tk.Frame(f, bg=COLOR_BG)
+            r.pack(fill=tk.X, pady=2)
+            tk.Label(r, text=k, bg=COLOR_BG, fg="#aaa", font=get_font(10),
+                     anchor="w").pack(side=tk.LEFT)
+            tk.Label(r, text=v, bg=COLOR_BG, fg="white", font=get_font(10, True),
+                     anchor="e").pack(side=tk.RIGHT)
+
+        head = tk.Frame(win, bg=COLOR_BG)
+        head.pack(fill=tk.X, padx=16, pady=(10, 2))
+        tk.Label(head, text="纪元首达", bg=COLOR_BG, fg=COLOR_GOLD,
+                 font=get_font(11, True), anchor="w").pack(side=tk.LEFT)
+        if s.era_first_times:
+            for i, t in sorted(s.era_first_times.items()):
+                if 0 <= i < len(ERAS):
+                    r = tk.Frame(win, bg=COLOR_BG)
+                    r.pack(fill=tk.X, padx=16)
+                    tk.Label(r, text=ERAS[i]["name"], bg=COLOR_BG, fg="#aaa",
+                             font=get_font(9), anchor="w").pack(side=tk.LEFT)
+                    tk.Label(r, text=self._fmt_playtime(time.time() - t) + "前",
+                             bg=COLOR_BG, fg="#888", font=get_font(9),
+                             anchor="e").pack(side=tk.RIGHT)
+        else:
+            tk.Label(win, text="（尚无）", bg=COLOR_BG, fg="#666",
+                     font=get_font(9)).pack(padx=16, anchor="w")
+
+    # =========================== 存档导出/导入 ===========================
+
+    def show_save_dialog(self, engine):
+        win = tk.Toplevel()
+        win.title("存档")
+        win.geometry("420x340")
+        win.configure(bg=COLOR_BG)
+        win.resizable(False, False)
+
+        tk.Label(win, text="💾 存档导出 / 导入", bg=COLOR_BG, fg=COLOR_GOLD,
+                 font=get_font(13, True)).pack(pady=(12, 6))
+
+        tk.Label(win, text="导出（复制下方字符串备份）", bg=COLOR_BG, fg="#aaa",
+                 font=get_font(9)).pack(pady=(4, 2))
+        exp = tk.Text(win, height=4, bg=COLOR_PANEL, fg="white",
+                      font=get_font(9), wrap="none")
+        exp.insert("end", engine.export_save())
+        exp.configure(state="disabled")
+        exp.pack(fill=tk.X, padx=16)
+
+        def copy():
+            try:
+                win.clipboard_clear()
+                win.clipboard_append(engine.export_save())
+                messagebox.showinfo("存档", "已复制到剪贴板")
+            except Exception:
+                pass
+
+        tk.Button(win, text="复制导出字符串", command=copy, bg=COLOR_BTN_BG,
+                  fg="white", font=get_font(10), relief="flat").pack(pady=4)
+
+        tk.Label(win, text="导入（粘贴上方字符串）", bg=COLOR_BG, fg="#aaa",
+                 font=get_font(9)).pack(pady=(6, 2))
+        imp = tk.Text(win, height=4, bg=COLOR_PANEL, fg="white",
+                      font=get_font(9), wrap="none")
+        imp.pack(fill=tk.X, padx=16)
+
+        def do_import():
+            txt = imp.get("1.0", "end").strip()
+            if not txt:
+                messagebox.showinfo("存档", "请粘贴导出字符串")
+                return
+            try:
+                engine.import_save(txt)
+                engine.save()
+                messagebox.showinfo("存档", "导入成功！")
+                if self._on_import_done:
+                    self._on_import_done()
+                win.destroy()
+            except Exception as ex:
+                messagebox.showinfo("存档", f"导入失败：{ex}")
+
+        tk.Button(win, text="导入", command=do_import, bg=COLOR_BTN_BG,
+                  fg="white", font=get_font(10), relief="flat").pack(pady=4)
+
     # =========================== 内部 ===========================
 
     def _clear_shop(self):
@@ -724,6 +956,8 @@ class GameUI:
     def _make_btn_label(self, d, qty, cost):
         l = d.description_tpl.replace("{cost}", self._fmt_gold(cost))
         l = l.replace("{qty}", str(qty))
+        if self.buy_mode != 1:
+            l += f" ×{self.buy_mode}"
         if d.per_second > 0:
             l += f" (+{self._fmt_dps(d.per_second)}/s)"
             nxt = None

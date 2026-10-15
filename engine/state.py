@@ -48,6 +48,10 @@ class GameState:
     event_remaining: float = 0.0        # 当前活动剩余时间
     event_gap: float = 0.0              # 距下一活动的时间
 
+    # ---- P2：统计页面（持久化）----
+    play_time: float = 0.0              # 累计游戏时长（秒）
+    era_first_times: dict = field(default_factory=dict)  # 纪元下标 -> 首次达成时间戳
+
     def to_dict(self) -> dict:
         return {
             "gold": self.gold,
@@ -78,6 +82,8 @@ class GameState:
             "event_key": self.event_key,
             "event_remaining": self.event_remaining,
             "event_gap": self.event_gap,
+            "play_time": self.play_time,
+            "era_first_times": dict(self.era_first_times),
             "ts": time.time(),
         }
 
@@ -118,6 +124,9 @@ class GameState:
         s.event_key = d.get("event_key")
         s.event_remaining = d.get("event_remaining", 0.0)
         s.event_gap = d.get("event_gap", 0.0)
+        # ---- P2 统计 ----
+        s.play_time = d.get("play_time", 0.0)
+        s.era_first_times = d.get("era_first_times", {})
         # ---- P1 装备：英雄 equipped 由单件迁移为 {slot: item} 字典 ----
         for hk, hv in s.heroes.items():
             hv["equipped"] = GameState._normalize_equipped(hv.get("equipped"))

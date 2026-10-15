@@ -5,7 +5,7 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 import time
-from config import WINDOW_WIDTH, WINDOW_HEIGHT, COLOR_BG, GAME_LOOP_MS, AUTOSAVE_SECONDS
+from config import WINDOW_WIDTH, WINDOW_HEIGHT, COLOR_BG, GAME_LOOP_MS, AUTOSAVE_SECONDS, SKILLS
 from engine import GameEngine
 from ui import GameUI
 
@@ -19,6 +19,7 @@ class App:
         self.root.configure(bg=COLOR_BG)
 
         self.engine = GameEngine()
+        self.sound_on = False
 
         self.ui = GameUI(
             self.root,
@@ -32,9 +33,18 @@ class App:
             on_daily_tasks=self._on_daily_tasks,
             on_hero_skill=self._on_hero_skill,
             on_golden_click=self._on_golden_click,
+            on_stats=lambda: self.ui.show_stats(self.engine),
+            on_save=lambda: self.ui.show_save_dialog(self.engine),
+            on_toggle_sound=self._toggle_sound,
+            on_import_done=self._full_draw,
         )
         self._full_draw()
         self._show_offline_modal()
+
+        # P2：键盘快捷键（空格=点击，1-5=技能）
+        self.root.bind("<space>", lambda e: self._on_click())
+        for i, sk in enumerate(SKILLS):
+            self.root.bind(str(i + 1), lambda e, k=sk["key"]: self._on_hotkey_skill(k))
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._last_tick = time.time()
@@ -48,16 +58,28 @@ class App:
             return
         gain = self.engine.click()
         self.ui.spawn_float(f"+{gain}")
+        self._beep(660, 40)
 
     def _on_buy(self, key):
-        err = self.engine.buy(key)
+        amt = 10 ** 9 if self.ui.buy_mode == "max" else self.ui.buy_mode
+        bought, err = self.engine.buy_multiple(key, amt)
         if err:
             messagebox.showinfo("无法购买", err)
+        elif bought:
+            self._beep(880, 35)
 
     def _on_skill(self, key):
         err = self.engine.activate_skill(key)
         if err:
             messagebox.showinfo("技能", err)
+        else:
+            self._beep(990, 35)
+
+    def _on_hotkey_skill(self, key):
+        # 对话框/输入框聚焦时不触发，避免误触
+        if any(isinstance(c, tk.Toplevel) for c in self.root.children.values()):
+            return
+        self._on_skill(key)
 
     def _on_hero(self, action, hero_key):
         if action == "upgrade":
@@ -112,6 +134,7 @@ class App:
                     messagebox.showinfo("转生", err)
                 else:
                     self._full_draw()
+                    self._beep(330, 90)
                     messagebox.showinfo("转生", f"获得 {f} 声望")
         elif choice == "2":
             k = self.ui.show_challenge_dialog(self.engine)
@@ -195,6 +218,20 @@ class App:
     def _on_close(self):
         self.engine.save()
         self.root.destroy()
+
+    # ==================== 音效（P2，标准库 winsound，零依赖） ====================
+    def _toggle_sound(self) -> bool:
+        self.sound_on = not self.sound_on
+        return self.sound_on
+
+    def _beep(self, freq: int, dur: int = 50):
+        if not self.sound_on:
+            return
+        try:
+            import winsound
+            winsound.Beep(freq, dur)
+        except Exception:
+            pass
 
     def run(self):
         self.root.mainloop()

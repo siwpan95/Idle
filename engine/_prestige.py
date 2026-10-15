@@ -76,6 +76,27 @@ class _PrestigeMixin:
             mult = ch.get("prestige_mult", 1.0)
         return max(int(base * mult), 1)
 
+    def get_prestige_preview(self) -> dict:
+        """转生预览：将获得的声望、当前声望、可购买的声望项。"""
+        gain = self.get_prestige_formula()
+        buyable = []
+        for pdef in PRESTIGE_UPGRADES:
+            lv = self.state.prestige_upgrades.get(pdef["key"], 0)
+            if lv < pdef["max_level"]:
+                cost = pdef["cost"] * (lv + 1)
+                next_prestige = self.state.prestige_points + gain
+                buyable.append({
+                    "name": pdef["name"],
+                    "cost": cost,
+                    "affordable": next_prestige >= cost,
+                })
+        return {
+            "gain": gain,
+            "current_points": self.state.prestige_points,
+            "will_have": self.state.prestige_points + gain,
+            "buyable": buyable,
+        }
+
     def prestige(self) -> str | None:
         if self.state.total_gold < 1000:
             return "总收益太低，需要至少 1000 金币才能转生"

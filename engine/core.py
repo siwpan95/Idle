@@ -4,6 +4,7 @@
 
 import time
 import random
+import math
 from config import (
     UPGRADE_DEFS, SKILLS, GOLDEN_BUFF, TICK_DT_MAX, OFFLINE_CAP_SECONDS,
 )
@@ -149,6 +150,9 @@ class GameEngine(
         if dt > TICK_DT_MAX:
             dt = TICK_DT_MAX
 
+        # 累计游戏时长（统计页面）
+        self.state.play_time += dt
+
         # DPS 产金
         self._add_gold(self.state.dps * dt)
 
@@ -178,6 +182,11 @@ class GameEngine(
             self._add_gold(gold_per_tick)
             if self._auto_click_remaining <= 0:
                 self._auto_click_rate = 0.0
+
+        # 光标：永久自动点击（每秒 click_power × 等级）——修复此前 per_second=0 空转
+        cursor_qty = self.state.upgrades.get("cursor", 0)
+        if cursor_qty > 0:
+            self._add_gold(self.state.click_power * cursor_qty * dt)
 
         # 黄金 buff
         if self._golden_buff_active:
@@ -260,32 +269,103 @@ class GameEngine(
         return self.state.gold >= d.get_cost(self.state.upgrades.get(key, 0))
 
     def buy(self, key: str) -> str | None:
+        """购买 1 个（兼容旧调用）。返回错误字符串或 None。"""
+        return self.buy_multiple(key, 1)[1]
+
+    # ==================== 批量购买 ====================
+
+    def _cost_for_n(self, d, qty: int, n: int) -> int:
+        """购买 n 个（从当前等级 qty 起）的总花费。"""
+        if n <= 0:
+            return 0
+        if d.limit:
+            n = min(n, d.limit - qty)
+            if n <= 0:
+                return 0
+        costs = d.costs
+        if len(costs) == 1:
+            r = 1.15
+            base = costs[0] * (r ** qty)
+            return int(base * (r ** n - 1) / (r - 1))
+        total = 0
+        for i in range(n):
+            total += costs[min(qty + i, len(costs) - 1)]
+        return total
+
+    def _max_buyable(self, d, qty: int, cap: int) -> int:
+        """在当前金币下，从 qty 起最多可购买数量（受上限约束）。"""
+        if d.limit:
+            cap = min(cap, d.limit - qty)
+        if cap <= 0:
+            return 0
+        if len(d.costs) == 1:
+            r = 1.15
+            base = d.costs[0] * (r ** qty)
+            if base <= 0:
+                return 0
+            ratio = self.state.gold * (r - 1) / base + 1
+            if ratio <= 1:
+                return 0
+            n = int(math.log(ratio, r))
+            # 修正浮点/取整误差
+            while n > 0 and self._cost_for_n(d, qty, n) > self.state.gold:
+                n -= 1
+            while (self._cost_for_n(d, qty, n + 1) <= self.state.gold
+                   and (d.limit is None or qty + n + 1 <= d.limit)):
+                n += 1
+            n = min(n, cap)
+            return max(0, n)
+        # 固定价目表
+        n = 0
+        while n < cap and self._cost_for_n(d, qty, n + 1) <= self.state.gold:
+            n += 1
+        return n
+
+    def buy_multiple(self, key: str, amount) -> tuple:
+        """批量购买。amount 为整数或字符串 'max'。
+        返回 (实际购买数量, 错误字符串|None)。"""
         d = self._defs.get(key)
         if d is None:
-            return "未知升级"
+            return (0, "未知升级")
         qty = self.state.upgrades.get(key, 0)
-        if not d.can_buy(qty):
-            return f"{d.name} 已达上限"
+        if d.limit and qty >= d.limit:
+            return (0, f"{d.name} 已达上限")
         if not self.is_era_unlocked(d.era):
-            return f"{d.name} 尚未在当前纪元解锁"
+            return (0, f"{d.name} 尚未在当前纪元解锁")
         if not self.check_prerequisite(d):
-            return self.get_prerequisite_text(d)
+            return (0, self.get_prerequisite_text(d))
         challenge = self._get_challenge()
         if d.per_second > 0 and challenge and challenge.get("restrict_dps"):
-            return "当前挑战禁用 DPS 装备"
-        cost = d.get_cost(qty)
-        if self.state.gold < cost:
-            return f"{d.name} 需要 {fmt_gold(cost)} 金币"
-        self.state.gold -= cost
-        self.state.upgrades[key] = qty + 1
-        self.state.stats["total_upgrades"] += 1
-        self._inc_daily_upgrades(1)
+            return (0, "当前挑战禁用 DPS 装备")
+
+        if amount == "max" or amount >= 10 ** 8:
+            amount = self._max_buyable(d, qty, 10 ** 9)
+        else:
+            amount = int(amount)
+            if d.limit:
+                amount = min(amount, d.limit - qty)
+        amount = max(amount, 0)
+        if amount <= 0:
+            return (0, "无法购买（已达上限或金币不足）")
+
+        total = self._cost_for_n(d, qty, amount)
+        if total > self.state.gold:
+            amount = self._max_buyable(d, qty, amount)
+            if amount <= 0:
+                return (0, f"{d.name} 需要 {fmt_gold(self._cost_for_n(d, qty, 1))} 金币")
+            total = self._cost_for_n(d, qty, amount)
+
+        self.state.gold -= total
+        self.state.upgrades[key] = qty + amount
+        self.state.stats["total_upgrades"] += amount
+        self._inc_daily_upgrades(amount)
         if d.empowers:
-            self.state.empowered[d.empowers.key] += 1
+            self.state.empowered[d.empowers.key] += amount
         if d.callback == "golden":
-            self._activate_golden(self._pick_golden_variant())
+            for _ in range(amount):
+                self._activate_golden(self._pick_golden_variant())
         self._recalc()
-        return None
+        return (amount, None)
 
     # ==================== 可见/分类 ====================
 
