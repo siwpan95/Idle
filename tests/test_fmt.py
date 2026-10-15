@@ -21,18 +21,23 @@ class TestFmtNum:
         assert fmt_num(10 ** 14) == "100,000,000,000,000"
 
     def test_between_1e15_and_1e308(self):
-        """10^15 ~ 10^308 用科学计数法。"""
+        """10^15 ~ 10^308 用「尾数+指数」科学记法（无 + 号）。"""
         result = fmt_num(10 ** 20)
-        assert "e+" in result
-        assert result.startswith("1.0e+")
+        assert result == "1.00e20"
+        assert "e+" not in result
+
+    def test_non_power_of_ten(self):
+        """非整 10 幂的大数，尾数保留 2 位小数。"""
+        result = fmt_num(12345 * 10 ** 50)
+        assert result == "1.23e54"
 
     def test_beyond_1e308_recursion(self):
-        """超过 float 上限时递归分块。"""
+        """超过 float 上限的超大整数仍用统一科学记法。"""
         huge = 10 ** 400
         result = fmt_num(huge)
-        # 应该返回如 "1.0e+1.0e+..." 的形式
-        assert "e+" in result
-        # 不应该抛出异常
+        # 统一为 "1.00e400"，不得再出现递归分块的 "e+e+" 形式
+        assert result == "1.00e400"
+        assert "e+" not in result
         assert len(result) > 0
 
     def test_float_input(self):

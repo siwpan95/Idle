@@ -25,6 +25,7 @@ TEST_FILES = [
     "tests.test_p0",
     "tests.test_p1",
     "tests.test_p2",
+    "tests.test_balance",
 ]
 
 

@@ -1,10 +1,28 @@
 """
 转生与挑战系统 Mixin — 转生重置、挑战模式、声望商店。
 """
+import math
 import time
 from config import PRESTIGE_UPGRADES, CHALLENGES
 from .state import GameState
 from .types import ChallengeDef, PrestigeUpgradeDef
+
+
+def _int_cbrt(n: int) -> int:
+    """整数立方根（向下取整），对任意大整数安全，不会触发浮点溢出。
+
+    普通的 ``n ** (1/3)`` 在 n > 10³⁰⁸ 时溢出为 inf，再 ``int(inf)`` 会崩溃；
+    此处用整数牛顿迭代，规模无关的纯整数运算。
+    """
+    if n < 2:
+        return n
+    x = 1 << ((n.bit_length() + 2) // 3)  # 按位长给出量级初值
+    while True:
+        y = (2 * x + n // (x * x)) // 3
+        if y >= x:
+            break
+        x = y
+    return x
 
 
 class _PrestigeMixin:
@@ -69,7 +87,13 @@ class _PrestigeMixin:
         return None
 
     def get_prestige_formula(self) -> int:
-        base = int(self.state.total_gold ** (1 / 3) + 0.5)
+        tg = self.state.total_gold
+        # 防御：极后期乘区叠加可能让 total_gold 溢出为 inf/nan，
+        # 直接给 1，避免 int(inf) 崩溃（见 _int_cbrt 注）。
+        if isinstance(tg, float) and (math.isinf(tg) or math.isnan(tg)):
+            base = 1
+        else:
+            base = _int_cbrt(int(tg)) if tg >= 0 else 0
         mult = 1.0
         ch = self._get_challenge()
         if ch and self.state.challenge_completed:
