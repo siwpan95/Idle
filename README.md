@@ -1,3 +1,8 @@
+> 📦 **已归档（Archived — 仅作参考）**
+> 本仓库已收入归档仓 **game-prototypes**（代码与完整 git 历史一并迁入，原仓冻结不再开发）。
+> 历史分支见归档仓的 `archive/Idle` 分支；活跃维护请前往 **game-prototypes**。
+> _This repo is archived into game-prototypes; development continues there. Do not commit here._
+
 # Idle Clicker — Canvas 放置挂机
 
 一个用 Python tkinter 构建的放置/点击类游戏。融合了**纪元进阶、科技树、英雄系统、装备掉落（部位/词条/套装）、英雄主动技能、黄金按钮、限时活动、日常任务、转生挑战**等系统，35 种装备从石器时代一路发展到太空时代。灵感来源于《兽人领地》《极简塔防》和《巴尔的遗产》。
